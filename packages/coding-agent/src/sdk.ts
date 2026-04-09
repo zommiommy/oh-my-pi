@@ -127,6 +127,7 @@ import {
 	WriteTool,
 	warmupLspServers,
 } from "./tools";
+import { CheckpointDepthTracker } from "./tools/checkpoint";
 import { ToolContextStore } from "./tools/context";
 import { getGeminiImageTools } from "./tools/gemini-image";
 import { wrapToolWithMetaNotice } from "./tools/output-meta";
@@ -834,6 +835,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	let agent: Agent;
 	let session: AgentSession;
+	const checkpointTracker = new CheckpointDepthTracker();
 
 	const enableLsp = options.enableLsp ?? true;
 	const asyncEnabled = settings.get("async.enabled");
@@ -922,7 +924,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		getDiscoverableMCPSearchIndex: () => session.getDiscoverableMCPSearchIndex(),
 		getSelectedMCPToolNames: () => session.getSelectedMCPToolNames(),
 		activateDiscoveredMCPTools: toolNames => session.activateDiscoveredMCPTools(toolNames),
-		get checkpointTracker() { return session.getCheckpointTracker(); },
+		checkpointTracker,
 		getToolChoiceQueue: () => session.toolChoiceQueue,
 		buildToolChoice: name => {
 			const m = session.model;
@@ -1561,6 +1563,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		obfuscator,
 		asyncJobManager,
 		searchDb,
+		checkpointTracker,
 	});
 
 	if (model?.api === "openai-codex-responses") {

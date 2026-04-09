@@ -245,6 +245,8 @@ export interface AgentSessionConfig {
 	obfuscator?: SecretObfuscator;
 	/** Shared native search DB for grep/glob/fuzzyFind-backed workflows. */
 	searchDb?: SearchDb;
+	/** Checkpoint depth tracker shared with ToolSession. */
+	checkpointTracker?: CheckpointDepthTracker;
 }
 
 /** Options for AgentSession.prompt() */
@@ -508,7 +510,7 @@ export class AgentSession {
 	#streamingEditFileCache = new Map<string, string>();
 	#promptInFlightCount = 0;
 	#obfuscator: SecretObfuscator | undefined;
-	#checkpointTracker = new CheckpointDepthTracker();
+	#checkpointTracker: CheckpointDepthTracker;
 	#promptGeneration = 0;
 	#providerSessionState = new Map<string, ProviderSessionState>();
 
@@ -541,6 +543,7 @@ export class AgentSession {
 
 		this.agent = config.agent;
 		this.agent.registerMessageFilter(checkpointFilter);
+		this.#checkpointTracker = config.checkpointTracker ?? new CheckpointDepthTracker();
 		this.sessionManager = config.sessionManager;
 		this.settings = config.settings;
 		this.searchDb = config.searchDb;
