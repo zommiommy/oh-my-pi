@@ -227,22 +227,18 @@ export const checkpointFilter: MessageFilter = (messages) => {
 
 // ── Tool schema ──────────────────────────────────────────────────────────
 
-const checkpointSchema = Type.Union(
-	[
-		Type.Object({
-			action: Type.Literal("create"),
-			goal: Type.String({ description: "What you are investigating and why" }),
-		}),
-		Type.Object({
-			action: Type.Literal("rewind"),
-			report: Type.String({ description: "Concise investigation findings to retain after rewind" }),
-		}),
-		Type.Object({
-			action: Type.Literal("drop"),
-		}),
-	],
-	{ discriminator: "action" },
-);
+const checkpointSchema = Type.Object({
+	action: Type.Unsafe<"create" | "rewind" | "drop">({
+		type: "string",
+		enum: ["create", "rewind", "drop"],
+		description:
+			"'create' to mark a checkpoint, 'rewind' to erase exploration and keep a report, 'drop' to discard the bookmark and keep exploration",
+	}),
+	goal: Type.Optional(Type.String({ description: "What you are investigating (required for create)" })),
+	report: Type.Optional(
+		Type.String({ description: "Concise investigation findings to retain (required for rewind)" }),
+	),
+});
 
 type CheckpointParams = Static<typeof checkpointSchema>;
 
@@ -311,17 +307,21 @@ export class CheckpointTool implements AgentTool<typeof checkpointSchema, Checkp
 
 		switch (params.action) {
 			case "create": {
+				const goal = params.goal?.trim();
+				if (!goal) {
+					throw new ToolError("'goal' is required for action 'create'.");
+				}
 				this.tracker.create();
 				const remaining = this.tracker.maxDepth - this.tracker.depth;
 				return toolResult<CreateDetails>({
 					action: "create",
-					goal: params.goal,
+					goal,
 					checkpointsRemaining: remaining,
 				})
 					.text(
 						[
 							"Checkpoint created.",
-							`Goal: ${params.goal}`,
+							`Goal: ${goal}`,
 							`${remaining} more checkpoint(s) allowed.`,
 							"Run your investigation, then call checkpoint with action rewind or drop.",
 						].join("\n"),
@@ -329,9 +329,9 @@ export class CheckpointTool implements AgentTool<typeof checkpointSchema, Checkp
 					.done();
 			}
 			case "rewind": {
-				const report = params.report.trim();
-				if (report.length === 0) {
-					throw new ToolError("Report cannot be empty.");
+				const report = params.report?.trim();
+				if (!report) {
+					throw new ToolError("'report' is required for action 'rewind' and cannot be empty.");
 				}
 				this.tracker.close();
 				return toolResult<RewindDetails>({
@@ -347,6 +347,8 @@ export class CheckpointTool implements AgentTool<typeof checkpointSchema, Checkp
 					.text("Checkpoint dropped. Exploration preserved.")
 					.done();
 			}
+			default:
+				throw new ToolError(`Unknown checkpoint action: '${params.action}'. Use 'create', 'rewind', or 'drop'.`);
 		}
 	}
 }
