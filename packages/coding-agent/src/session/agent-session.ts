@@ -976,8 +976,12 @@ export class AgentSession {
 				if (toolName === "checkpoint" && !isError) {
 					const action = details?.action;
 					if (action === "create") {
-						// Patch the real messageCount now that the tool result is committed.
-						this.#checkpointController.patchMessageCount(this.agent.state.messages.length);
+						// Capture messageCount BEFORE the checkpoint's assistant + tool result
+						// messages (2 entries). This ensures the checkpoint call itself gets
+						// erased on rewind — matching the v12x optimization.
+						this.#checkpointController.patchMessageCount(
+							Math.max(0, this.agent.state.messages.length - 2)
+						);
 						const entryId = this.sessionManager.getEntries().at(-1)?.id ?? "";
 						this.#checkpointEntryIds.push(entryId);
 					}
@@ -4153,11 +4157,23 @@ export class AgentSession {
 	}
 
 	#applyDrop(payload: DropPayload): void {
-		this.#checkpointEntryIds.pop();
+		const entryId = this.#checkpointEntryIds.pop() ?? null;
+		// Record the drop in the session file for audit/replay (no branch — exploration kept).
+		try {
+			this.sessionManager.appendCustomMessageEntry(
+				"checkpoint-drop",
+				"Checkpoint dropped. Exploration preserved.",
+				false,
+				{ checkpointEntryId: entryId, messageCount: payload.messageCount },
+				"agent",
+			);
+		} catch {
+			// Non-critical — session persistence failure shouldn't block the agent.
+		}
 		const messages = [...this.agent.state.messages];
-		// Splice out checkpoint call+result at the saved position (2 messages)
+		// Splice out checkpoint call+result at the saved position (2 messages).
 		messages.splice(payload.messageCount, 2);
-		// Splice out drop call+result at end (2 messages)
+		// Splice out drop call+result at end (last 2 messages).
 		messages.splice(messages.length - 2, 2);
 		this.agent.replaceMessages(messages);
 	}
