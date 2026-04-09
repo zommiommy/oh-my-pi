@@ -194,6 +194,16 @@ export interface AgentState {
 	error?: string;
 }
 
+/**
+ * A message filter transforms the raw message history into a filtered view
+ * before each LLM call. Filters are composable — they run in registration
+ * order, each receiving the output of the previous.
+ *
+ * The raw history (agent.state.messages) is never mutated. The filter only
+ * affects what the model sees.
+ */
+export type MessageFilter = (messages: AgentMessage[]) => AgentMessage[];
+
 export interface AgentToolResult<T = any, _TInput = unknown> {
 	// Content blocks supporting text and images
 	content: (TextContent | ImageContent)[];

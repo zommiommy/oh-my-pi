@@ -1,4 +1,43 @@
+/**
+ * Checkpoint / Rewind / Drop — agent context compression via message filters.
+ *
+ * Instead of mutating message history, checkpoint operations leave markers
+ * in the append-only history. A message filter (registered on the agent)
+ * scans the history before each LLM call and computes the "visible view"
+ * using balanced parenthesis matching:
+ *
+ *   create  = open paren  (2 messages: assistant tool call + tool result)
+ *   rewind  = close paren → hide entire span, inject report as replacement
+ *   drop    = close paren → hide only the create and drop markers, keep exploration
+ *
+ * Nesting is handled naturally: inner pairs are resolved first, outer pairs
+ * see the already-filtered interior.
+ *
+ * ─── Data flow ──────────────────────────────────────────────────────────
+ *
+ *   1. Model calls checkpoint({ action: 'create', goal })
+ *      → Tool appends assistant + toolResult messages to raw history.
+ *        No state mutation. The depth counter increments for validation.
+ *
+ *   2. Model does exploratory work (many tool calls).
+ *
+ *   3a. Model calls checkpoint({ action: 'rewind', report })
+ *       → Raw history now has: [create pair] [exploration] [rewind pair]
+ *       → Next LLM call: filter hides the entire span, injects report.
+ *       → Model sees: [...pre-checkpoint] [report message]
+ *
+ *   3b. Model calls checkpoint({ action: 'drop' })
+ *       → Raw history now has: [create pair] [exploration] [drop pair]
+ *       → Next LLM call: filter hides only the marker pairs.
+ *       → Model sees: [...pre-checkpoint] [exploration]
+ *
+ * ─── Wiring ─────────────────────────────────────────────────────────────
+ *
+ *   agent.registerMessageFilter(checkpointFilter);
+ */
+
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type { AgentMessage, MessageFilter } from "@oh-my-pi/pi-agent-core";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import checkpointDescription from "../prompts/tools/checkpoint.md" with { type: "text" };
@@ -7,234 +46,186 @@ import type { OutputMeta } from "./output-meta";
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
-// ── Payloads (consumed by session handler's tool_result / turn_end hooks) ──
-
-/** Rewind: truncate history to checkpoint, inject report. */
-export interface RewindPayload {
-	readonly kind: "rewind";
-	readonly checkpointsActive: number;
-	readonly messageCount: number;
-	readonly report: string;
-}
-
-/**
- * Drop: splice out the checkpoint call/result and the drop call/result,
- * preserving everything in between.
- */
-export interface DropPayload {
-	readonly kind: "drop";
-	readonly checkpointsActive: number;
-	readonly messageCount: number;
-}
-
-/**
- * Discriminated union consumed by the session handler via
- * {@link CheckpointController.consumePayload}.
- *
- * - `rewind`: truncate history to `messageCount`, inject `report`.
- * - `drop`: splice out checkpoint messages at `messageCount` (2 entries)
- *   and the drop messages at the end of history (2 entries).
- */
-export type PendingPayload = RewindPayload | DropPayload;
-
-// ── Checkpoint stack entry ────────────────────────────────────────────────
-
-export interface CheckpointEntry {
-	readonly goal: string;
-	/**
-	 * Message count captured AFTER the checkpoint tool result is appended.
-	 * The session handler sets this via the controller after the tool_result
-	 * event fires.
-	 */
-	readonly messageCount: number;
-}
-
-/**
- * Session-level checkpoint tracking state.
- * Used by the session handler to record where a checkpoint was created
- * in the message history and session tree.
- */
-export interface CheckpointState {
-	/** Number of in-memory messages at checkpoint (AFTER checkpoint tool result is appended) */
-	checkpointMessageCount: number;
-	/** Session entry ID at checkpoint (for session tree branching) */
-	checkpointEntryId: string | null;
-	/** Timestamp */
-	startedAt: string;
-}
+// ── Depth tracker (validation only) ──────────────────────────────────────
 
 /** Default maximum checkpoint nesting depth. */
 export const DEFAULT_MAX_CHECKPOINT_DEPTH = 3;
 
-// ── Controller ────────────────────────────────────────────────────────────
-
 /**
- * Shared controller for checkpoint / rewind / drop.
+ * Lightweight tracker for tool-time validation. Counts open checkpoints
+ * so the tool can reject at maxDepth or when no checkpoint is active.
  *
- * Checkpoints form a stack. Each `create` pushes; each `rewind` or `drop`
- * pops the most recent entry. This enables DFS-style exploration with
- * bounded nesting.
- *
- * The tool itself calls `activate(goal, 0)` — the session handler patches
- * the real `messageCount` after the tool_result event, because only the
- * handler has access to `agent.state.messages.length`.
+ * No message counts, no payloads, no hooks — all history manipulation
+ * is handled by {@link checkpointFilter}.
  */
-export class CheckpointController {
+export class CheckpointDepthTracker {
 	readonly maxDepth: number;
-	#stack: CheckpointEntry[] = [];
-	#pendingPayload: PendingPayload | undefined;
+	#depth = 0;
 
 	constructor(maxDepth: number = DEFAULT_MAX_CHECKPOINT_DEPTH) {
 		this.maxDepth = maxDepth;
 	}
 
-	/** Whether at least one checkpoint is active. */
 	get active(): boolean {
-		return this.#stack.length > 0;
+		return this.#depth > 0;
 	}
-
-	/** Current nesting depth (0 = no active checkpoints). */
 	get depth(): number {
-		return this.#stack.length;
+		return this.#depth;
 	}
 
-	/** The most recent (deepest) checkpoint entry, or undefined if inactive. */
-	get state(): CheckpointEntry | undefined {
-		return this.#stack.at(-1);
-	}
-
-	/**
-	 * Push a new checkpoint onto the stack.
-	 *
-	 * Throws if max depth is reached, or if another checkpoint in the same
-	 * turn already recorded the same messageCount (parallel tool calls).
-	 *
-	 * @param goal — what the agent is investigating
-	 * @param messageCount — history length at checkpoint time; set to 0 by
-	 *   the tool, then patched by the session handler after tool_result
-	 */
-	activate(goal: string, messageCount: number): void {
-		if (this.#stack.length >= this.maxDepth) {
+	create(): void {
+		if (this.#depth >= this.maxDepth) {
 			throw new ToolError(
 				`Maximum checkpoint depth (${this.maxDepth}) reached. Rewind or drop an existing checkpoint first.`,
 			);
 		}
-		const top = this.#stack.at(-1);
-		if (top && top.messageCount === messageCount && messageCount !== 0) {
-			throw new ToolError(
-				"Cannot create multiple checkpoints in the same turn. Checkpoint sequentially.",
-			);
-		}
-		this.#stack.push({ goal, messageCount });
+		this.#depth++;
 	}
 
-	/**
-	 * Update the messageCount of the most recent checkpoint.
-	 * Called by the session handler after it observes the tool_result event
-	 * and knows the actual agent message count.
-	 */
-	patchMessageCount(messageCount: number): void {
-		const top = this.#stack.at(-1);
-		if (!top) return;
-		// Replace the top entry (entries are readonly interfaces, so rebuild)
-		this.#stack[this.#stack.length - 1] = { ...top, messageCount };
-	}
-
-	/**
-	 * Pop the deepest checkpoint and buffer a {@link RewindPayload}.
-	 *
-	 * Throws if the stack is empty, the report is empty, or a prior
-	 * payload has not been consumed yet (parallel tool calls).
-	 */
-	rewind(report: string): RewindPayload {
-		if (this.#pendingPayload) {
-			throw new ToolError(
-				"A rewind or drop is already pending. Cannot call rewind in the same turn.",
-			);
-		}
-		const top = this.#stack.at(-1);
-		if (!top) {
+	close(): void {
+		if (this.#depth === 0) {
 			throw new ToolError("No active checkpoint.");
 		}
-		const trimmed = report.trim();
-		if (trimmed.length === 0) {
-			throw new ToolError("Report cannot be empty.");
-		}
-		this.#stack.pop();
-		const payload: RewindPayload = {
-			kind: "rewind",
-			checkpointsActive: this.#stack.length,
-			messageCount: top.messageCount,
-			report: trimmed,
-		};
-		this.#pendingPayload = payload;
-		return payload;
+		this.#depth--;
 	}
 
-	/**
-	 * Pop the deepest checkpoint and buffer a {@link DropPayload}.
-	 * Keeps all exploration messages; the session handler splices out only
-	 * the checkpoint and drop tool messages.
-	 *
-	 * Throws if the stack is empty or a payload is already pending.
-	 */
-	drop(): DropPayload {
-		if (this.#pendingPayload) {
-			throw new ToolError(
-				"A rewind or drop is already pending. Cannot call drop in the same turn.",
-			);
-		}
-		if (this.#stack.length === 0) {
-			throw new ToolError("No active checkpoint to drop.");
-		}
-		const top = this.#stack.pop()!;
-		const payload: DropPayload = {
-			kind: "drop",
-			checkpointsActive: this.#stack.length,
-			messageCount: top.messageCount,
-		};
-		this.#pendingPayload = payload;
-		return payload;
-	}
-
-	/**
-	 * Consume the buffered payload. Returns undefined if no rewind or drop
-	 * has occurred since the last consumption. Intended for session handler hooks.
-	 */
-	consumePayload(): PendingPayload | undefined {
-		const payload = this.#pendingPayload;
-		this.#pendingPayload = undefined;
-		return payload;
-	}
-
-	/**
-	 * Check whether the agent is about to yield with active checkpoints.
-	 * Returns a warning message to inject if enforcement is needed,
-	 * or undefined if no checkpoints are active.
-	 *
-	 * Call this from the agent's turn-end hook. If it returns a string,
-	 * inject it as a system message and continue the run.
-	 */
+	/** Returns a warning string if checkpoints are active, undefined otherwise. */
 	enforceRewind(): string | undefined {
-		if (this.#stack.length === 0) return undefined;
-		const goals = this.#stack.map((s) => s.goal);
+		if (this.#depth === 0) return undefined;
 		return [
 			"<system-interrupt>",
-			`You have ${this.#stack.length} active checkpoint(s) that must be resolved before yielding.`,
-			...goals.map((g) => `<checkpoint-goal>${g}</checkpoint-goal>`),
-			"Call rewind (to erase exploration) or drop (to keep exploration) for each active checkpoint before finishing.",
+			`You have ${this.#depth} active checkpoint(s) that must be resolved before yielding.`,
+			"Call checkpoint with action rewind (to erase) or drop (to keep) for each before finishing.",
 			"</system-interrupt>",
 		].join("\n");
 	}
 
-	/** Clear the entire checkpoint stack. Used on abort or cancel. */
 	cancel(): void {
-		this.#stack.length = 0;
-		this.#pendingPayload = undefined;
+		this.#depth = 0;
 	}
 }
 
-// ── Tool schema ───────────────────────────────────────────────────────────
+// ── Checkpoint message filter ────────────────────────────────────────────
+
+/** Sentinel interface for the report message injected by the filter. */
+interface CheckpointReportMessage {
+	role: "developer";
+	content: Array<{ type: "text"; text: string }>;
+	attribution: "agent";
+	timestamp: number;
+}
+
+/**
+ * Extracts the checkpoint action from a message, if it is a checkpoint
+ * tool result. Returns undefined for non-checkpoint messages.
+ */
+function getCheckpointAction(
+	msg: AgentMessage,
+): { action: "create" | "rewind" | "drop"; report?: string } | undefined {
+	if (!("role" in msg) || msg.role !== "toolResult") return undefined;
+	if (msg.toolName !== "checkpoint") return undefined;
+	const details = msg.details as { action?: string; report?: string } | undefined;
+	if (!details?.action) return undefined;
+	if (details.action === "create" || details.action === "rewind" || details.action === "drop") {
+		return { action: details.action, report: details.report };
+	}
+	return undefined;
+}
+
+/**
+ * Balanced parenthesis filter for checkpoint/rewind/drop.
+ *
+ * Scans the message array for checkpoint tool results. Each `create` is an
+ * open paren, each `rewind`/`drop` is a close paren. The filter resolves
+ * matched pairs and hides/replaces messages accordingly:
+ *
+ * - **rewind**: hides the create pair (assistant + toolResult), all messages
+ *   between, and the rewind pair. Injects the report as a developer message.
+ * - **drop**: hides only the create pair and the drop pair. Exploration
+ *   messages between them are preserved.
+ *
+ * Operates on toolResult messages (not assistant messages) to identify
+ * checkpoint boundaries. Each toolResult at index `i` has a corresponding
+ * assistant message at `i - 1`. Both are hidden together.
+ */
+export const checkpointFilter: MessageFilter = (messages) => {
+	// Find all checkpoint toolResult indices and their actions.
+	const markers: Array<{
+		index: number;
+		action: "create" | "rewind" | "drop";
+		report?: string;
+	}> = [];
+
+	for (let i = 0; i < messages.length; i++) {
+		const parsed = getCheckpointAction(messages[i]);
+		if (parsed) {
+			markers.push({ ...parsed, index: i });
+		}
+	}
+
+	if (markers.length === 0) return messages;
+
+	// Balanced parenthesis matching: build a set of indices to hide,
+	// and a map of indices where report messages should be injected.
+	const hidden = new Set<number>();
+	const reportInjections = new Map<number, string>(); // index → report to inject BEFORE this index
+	const stack: Array<{ index: number }> = []; // stack of open (create) marker indices
+
+	for (const marker of markers) {
+		if (marker.action === "create") {
+			stack.push({ index: marker.index });
+		} else {
+			const open = stack.pop();
+			if (!open) continue; // unmatched close — skip
+
+			const openToolResultIdx = open.index;
+			const closeToolResultIdx = marker.index;
+
+			if (marker.action === "rewind") {
+				// Hide everything from the create's assistant message through the
+				// rewind's tool result (inclusive).
+				for (let i = openToolResultIdx - 1; i <= closeToolResultIdx; i++) {
+					if (i >= 0) hidden.add(i);
+				}
+				// Inject report after the hidden span.
+				if (marker.report) {
+					reportInjections.set(closeToolResultIdx, marker.report);
+				}
+			} else {
+				// Drop: hide only the create pair (assistant + toolResult)
+				// and the drop pair (assistant + toolResult).
+				if (openToolResultIdx - 1 >= 0) hidden.add(openToolResultIdx - 1); // create assistant
+				hidden.add(openToolResultIdx); // create toolResult
+				if (closeToolResultIdx - 1 >= 0) hidden.add(closeToolResultIdx - 1); // drop assistant
+				hidden.add(closeToolResultIdx); // drop toolResult
+			}
+		}
+	}
+
+	if (hidden.size === 0 && reportInjections.size === 0) return messages;
+
+	// Build the filtered message array.
+	const result: AgentMessage[] = [];
+	for (let i = 0; i < messages.length; i++) {
+		// If a report should be injected after a hidden rewind span, add it here.
+		if (reportInjections.has(i)) {
+			const report = reportInjections.get(i)!;
+			result.push({
+				role: "developer",
+				content: [{ type: "text", text: report }],
+				attribution: "agent",
+				timestamp: Date.now(),
+			} as CheckpointReportMessage as AgentMessage);
+		}
+		if (!hidden.has(i)) {
+			result.push(messages[i]);
+		}
+	}
+
+	return result;
+};
+
+// ── Tool schema ──────────────────────────────────────────────────────────
 
 const checkpointSchema = Type.Union(
 	[
@@ -255,7 +246,7 @@ const checkpointSchema = Type.Union(
 
 type CheckpointParams = Static<typeof checkpointSchema>;
 
-// ── Tool details ──────────────────────────────────────────────────────────
+// ── Tool details ─────────────────────────────────────────────────────────
 
 interface CreateDetails {
 	action: "create";
@@ -277,14 +268,14 @@ interface DropDetails {
 
 export type CheckpointToolDetails = CreateDetails | RewindDetails | DropDetails;
 
-// ── Guards ────────────────────────────────────────────────────────────────
+// ── Guards ───────────────────────────────────────────────────────────────
 
 function isTopLevelSession(session: ToolSession): boolean {
 	const depth = session.taskDepth;
 	return depth === undefined || depth === 0;
 }
 
-// ── Tool ──────────────────────────────────────────────────────────────────
+// ── Tool ─────────────────────────────────────────────────────────────────
 
 export class CheckpointTool implements AgentTool<typeof checkpointSchema, CheckpointToolDetails> {
 	readonly name = "checkpoint";
@@ -295,16 +286,16 @@ export class CheckpointTool implements AgentTool<typeof checkpointSchema, Checkp
 
 	constructor(
 		private readonly session: ToolSession,
-		private readonly controller: CheckpointController,
+		private readonly tracker: CheckpointDepthTracker,
 	) {
 		this.description = prompt.render(checkpointDescription);
 	}
 
 	static createIf(session: ToolSession): CheckpointTool | null {
 		if (!isTopLevelSession(session)) return null;
-		const controller = session.checkpointController;
-		if (!controller) return null;
-		return new CheckpointTool(session, controller);
+		const tracker = session.checkpointTracker;
+		if (!tracker) return null;
+		return new CheckpointTool(session, tracker);
 	}
 
 	async execute(
@@ -320,11 +311,8 @@ export class CheckpointTool implements AgentTool<typeof checkpointSchema, Checkp
 
 		switch (params.action) {
 			case "create": {
-				// messageCount=0 is a placeholder; the session handler patches
-				// it to the real value via controller.patchMessageCount() after
-				// the tool_result event fires.
-				this.controller.activate(params.goal, 0);
-				const remaining = this.controller.maxDepth - this.controller.depth;
+				this.tracker.create();
+				const remaining = this.tracker.maxDepth - this.tracker.depth;
 				return toolResult<CreateDetails>({
 					action: "create",
 					goal: params.goal,
@@ -341,18 +329,20 @@ export class CheckpointTool implements AgentTool<typeof checkpointSchema, Checkp
 					.done();
 			}
 			case "rewind": {
-				this.controller.rewind(params.report);
+				const report = params.report.trim();
+				if (report.length === 0) {
+					throw new ToolError("Report cannot be empty.");
+				}
+				this.tracker.close();
 				return toolResult<RewindDetails>({
 					action: "rewind",
-					report: params.report,
+					report,
 				})
-					.text(
-						["Rewind requested.", "Report captured for context replacement."].join("\n"),
-					)
+					.text(["Rewind requested.", "Report captured for context replacement."].join("\n"))
 					.done();
 			}
 			case "drop": {
-				this.controller.drop();
+				this.tracker.close();
 				return toolResult<DropDetails>({ action: "drop" })
 					.text("Checkpoint dropped. Exploration preserved.")
 					.done();

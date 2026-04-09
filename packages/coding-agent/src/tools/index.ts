@@ -28,7 +28,7 @@ import { BrowserTool } from "./browser";
 
 import { CalculatorTool } from "./calculator";
 import { CancelJobTool } from "./cancel-job";
-import { CheckpointController, CheckpointTool } from "./checkpoint";
+import { CheckpointDepthTracker, CheckpointTool } from "./checkpoint";
 import { DebugTool } from "./debug";
 import { ExitPlanModeTool } from "./exit-plan-mode";
 import { FindTool } from "./find";
@@ -191,7 +191,7 @@ export interface ToolSession {
 	/** Peek the currently in-flight tool-choice queue directive's invocation handler. Used by the `resolve` tool to dispatch to the pending action. */
 	peekQueueInvoker?(): ((input: unknown) => Promise<unknown> | unknown) | undefined;
 	/** Checkpoint controller for stack-based checkpoint/rewind/drop. */
-	checkpointController?: CheckpointController;
+	checkpointTracker?: CheckpointDepthTracker;
 
 	/** Queue a hidden message to be injected at the next agent turn. */
 	queueDeferredMessage?(message: CustomMessage): void;
@@ -226,7 +226,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	read: s => new ReadTool(s),
 	inspect_image: s => new InspectImageTool(s),
 	browser: s => new BrowserTool(s),
-	checkpoint: s => s.checkpointController ? CheckpointTool.createIf(s, s.checkpointController) : null,
+	checkpoint: CheckpointTool.createIf,
 	task: TaskTool.create,
 	cancel_job: CancelJobTool.createIf,
 	await: AwaitTool.createIf,

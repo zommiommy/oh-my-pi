@@ -117,7 +117,7 @@ import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { t
 import { deobfuscateSessionContext, type SecretObfuscator } from "../secrets/obfuscator";
 import { resolveThinkingLevelForModel, toReasoningEffort } from "../thinking";
 import { assertEditableFile } from "../tools/auto-generated-guard";
-import { CheckpointController, type DropPayload, type RewindPayload } from "../tools/checkpoint";
+import { CheckpointDepthTracker, checkpointFilter } from "../tools/checkpoint";
 import { outputMeta } from "../tools/output-meta";
 import { resolveToCwd } from "../tools/path-utils";
 import { isAutoQaEnabled } from "../tools/report-tool-issue";
@@ -508,8 +508,7 @@ export class AgentSession {
 	#streamingEditFileCache = new Map<string, string>();
 	#promptInFlightCount = 0;
 	#obfuscator: SecretObfuscator | undefined;
-	#checkpointController = new CheckpointController();
-	#checkpointEntryIds: string[] = [];
+	#checkpointTracker = new CheckpointDepthTracker();
 	#promptGeneration = 0;
 	#providerSessionState = new Map<string, ProviderSessionState>();
 
@@ -541,6 +540,7 @@ export class AgentSession {
 		setNativeKillTree(killTree);
 
 		this.agent = config.agent;
+		this.agent.registerMessageFilter(checkpointFilter);
 		this.sessionManager = config.sessionManager;
 		this.settings = config.settings;
 		this.searchDb = config.searchDb;
@@ -758,16 +758,6 @@ export class AgentSession {
 				this.#toolChoiceQueue.resolve();
 			}
 		}
-		if (event.type === "turn_end") {
-			const payload = this.#checkpointController.consumePayload();
-			if (payload) {
-				if (payload.kind === "rewind") {
-					await this.#applyRewind(payload);
-				} else {
-					this.#applyDrop(payload);
-				}
-			}
-		}
 
 		// TTSR: Check for pattern matches on assistant text/thinking and tool argument deltas
 		if (event.type === "message_update" && this.#ttsrManager?.hasRules()) {
@@ -973,19 +963,6 @@ export class AgentSession {
 						{ deliverAs: "nextTurn" },
 					);
 				}
-				if (toolName === "checkpoint" && !isError) {
-					const action = details?.action;
-					if (action === "create") {
-						// Capture messageCount BEFORE the checkpoint's assistant + tool result
-						// messages (2 entries). This ensures the checkpoint call itself gets
-						// erased on rewind — matching the v12x optimization.
-						this.#checkpointController.patchMessageCount(
-							Math.max(0, this.agent.state.messages.length - 2)
-						);
-						const entryId = this.sessionManager.getEntries().at(-1)?.id ?? "";
-						this.#checkpointEntryIds.push(entryId);
-					}
-				}
 			}
 		}
 
@@ -1011,8 +988,7 @@ export class AgentSession {
 			this.#resolveRetry();
 
 			if (msg.stopReason === "aborted") {
-				this.#checkpointController.cancel();
-				this.#checkpointEntryIds.length = 0;
+				this.#checkpointTracker.cancel();
 			}
 			const compactionTask = this.#checkCompaction(msg);
 			this.#trackPostPromptTask(compactionTask);
@@ -2269,8 +2245,8 @@ export class AgentSession {
 		this.#planReferencePath = path;
 	}
 
-	getCheckpointController(): CheckpointController {
-		return this.#checkpointController;
+	getCheckpointTracker(): CheckpointDepthTracker {
+		return this.#checkpointTracker;
 	}
 
 	/**
@@ -4119,7 +4095,7 @@ export class AgentSession {
 		}
 	}
 	#enforceRewindBeforeYield(): boolean {
-		const warning = this.#checkpointController.enforceRewind();
+		const warning = this.#checkpointTracker.enforceRewind();
 		if (!warning) return false;
 		this.agent.appendMessage({
 			role: "developer",
@@ -4129,53 +4105,6 @@ export class AgentSession {
 		});
 		this.#scheduleAgentContinue({ generation: this.#promptGeneration });
 		return true;
-	}
-
-	async #applyRewind(payload: RewindPayload): Promise<void> {
-		const entryId = this.#checkpointEntryIds.pop() ?? null;
-		const safeCount = Math.max(0, Math.min(payload.messageCount, this.agent.state.messages.length));
-		this.agent.replaceMessages(this.agent.state.messages.slice(0, safeCount));
-		try {
-			this.sessionManager.branchWithSummary(entryId, payload.report);
-		} catch (error) {
-			logger.warn("Rewind branch checkpoint missing, falling back to root", {
-				error: error instanceof Error ? error.message : String(error),
-			});
-			this.sessionManager.branchWithSummary(null, payload.report);
-		}
-		const details = { rewoundAt: new Date().toISOString() };
-		this.agent.appendMessage({
-			role: "custom",
-			customType: "rewind-report",
-			content: payload.report,
-			display: false,
-			details,
-			attribution: "agent",
-			timestamp: Date.now(),
-		});
-		this.sessionManager.appendCustomMessageEntry("rewind-report", payload.report, false, details, "agent");
-	}
-
-	#applyDrop(payload: DropPayload): void {
-		const entryId = this.#checkpointEntryIds.pop() ?? null;
-		// Record the drop in the session file for audit/replay (no branch — exploration kept).
-		try {
-			this.sessionManager.appendCustomMessageEntry(
-				"checkpoint-drop",
-				"Checkpoint dropped. Exploration preserved.",
-				false,
-				{ checkpointEntryId: entryId, messageCount: payload.messageCount },
-				"agent",
-			);
-		} catch {
-			// Non-critical — session persistence failure shouldn't block the agent.
-		}
-		const messages = [...this.agent.state.messages];
-		// Splice out checkpoint call+result at the saved position (2 messages).
-		messages.splice(payload.messageCount, 2);
-		// Splice out drop call+result at end (last 2 messages).
-		messages.splice(messages.length - 2, 2);
-		this.agent.replaceMessages(messages);
 	}
 	async #enforcePlanModeToolDecision(): Promise<void> {
 		if (!this.#planModeState?.enabled) {

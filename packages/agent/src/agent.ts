@@ -29,6 +29,7 @@ import type {
 	AgentState,
 	AgentTool,
 	AgentToolContext,
+	MessageFilter,
 	StreamFn,
 	ToolCallContext,
 } from "./types";
@@ -214,6 +215,7 @@ export class Agent {
 	};
 
 	#listeners = new Set<(e: AgentEvent) => void>();
+	#messageFilters: MessageFilter[] = [];
 	#abortController?: AbortController;
 	#convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	#transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
@@ -411,6 +413,20 @@ export class Agent {
 	subscribe(fn: (e: AgentEvent) => void): () => void {
 		this.#listeners.add(fn);
 		return () => this.#listeners.delete(fn);
+	}
+
+	/**
+	 * Register a message filter that transforms the conversation history before
+	 * each LLM call. Filters run in registration order, each receiving the output
+	 * of the previous. The raw history (state.messages) is never mutated.
+	 * Returns an unsubscribe function.
+	 */
+	registerMessageFilter(filter: MessageFilter): () => void {
+		this.#messageFilters.push(filter);
+		return () => {
+			const idx = this.#messageFilters.indexOf(filter);
+			if (idx >= 0) this.#messageFilters.splice(idx, 1);
+		};
 	}
 
 	setAssistantMessageEventInterceptor(
@@ -711,9 +727,16 @@ export class Agent {
 
 		const reasoning = this.#state.thinkingLevel;
 
+		// Apply registered message filters before building the context.
+		// Filters transform the visible view; the raw history is preserved.
+		let filteredMessages = this.#state.messages.slice();
+		for (const filter of this.#messageFilters) {
+			filteredMessages = filter(filteredMessages);
+		}
+
 		const context: AgentContext = {
 			systemPrompt: this.#state.systemPrompt,
-			messages: this.#state.messages.slice(),
+			messages: filteredMessages,
 			tools: this.#state.tools,
 		};
 
