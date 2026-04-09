@@ -4037,6 +4037,13 @@ export class AgentSession {
 	async #checkCompaction(assistantMessage: AssistantMessage, skipAbortedCheck = true): Promise<void> {
 		// Skip if message was aborted (user cancelled) - unless skipAbortedCheck is false
 		if (skipAbortedCheck && assistantMessage.stopReason === "aborted") return;
+		// Resolve completed checkpoint spans before compaction evaluates context size.
+		// This permanently flattens matched create/rewind and create/drop pairs so
+		// compaction never sees (or accidentally breaks) checkpoint markers.
+		const resolved = checkpointFilter(this.agent.state.messages);
+		if (resolved.length !== this.agent.state.messages.length) {
+			this.agent.replaceMessages(resolved);
+		}
 		const contextWindow = this.model?.contextWindow ?? 0;
 		const generation = this.#promptGeneration;
 		// Skip overflow check if the message came from a different model.
