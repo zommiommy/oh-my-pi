@@ -117,7 +117,7 @@ import ttsrInterruptTemplate from "../prompts/system/ttsr-interrupt.md" with { t
 import { deobfuscateSessionContext, type SecretObfuscator } from "../secrets/obfuscator";
 import { resolveThinkingLevelForModel, toReasoningEffort } from "../thinking";
 import { assertEditableFile } from "../tools/auto-generated-guard";
-import type { CheckpointState } from "../tools/checkpoint";
+import { CheckpointController, type DropPayload, type RewindPayload } from "../tools/checkpoint";
 import { outputMeta } from "../tools/output-meta";
 import { resolveToCwd } from "../tools/path-utils";
 import { isAutoQaEnabled } from "../tools/report-tool-issue";
@@ -508,8 +508,8 @@ export class AgentSession {
 	#streamingEditFileCache = new Map<string, string>();
 	#promptInFlightCount = 0;
 	#obfuscator: SecretObfuscator | undefined;
-	#checkpointState: CheckpointState | undefined = undefined;
-	#pendingRewindReport: string | undefined = undefined;
+	#checkpointController = new CheckpointController();
+	#checkpointEntryIds: string[] = [];
 	#promptGeneration = 0;
 	#providerSessionState = new Map<string, ProviderSessionState>();
 
@@ -758,10 +758,15 @@ export class AgentSession {
 				this.#toolChoiceQueue.resolve();
 			}
 		}
-		if (event.type === "turn_end" && this.#pendingRewindReport) {
-			const report = this.#pendingRewindReport;
-			this.#pendingRewindReport = undefined;
-			await this.#applyRewind(report);
+		if (event.type === "turn_end") {
+			const payload = this.#checkpointController.consumePayload();
+			if (payload) {
+				if (payload.kind === "rewind") {
+					await this.#applyRewind(payload);
+				} else {
+					this.#applyDrop(payload);
+				}
+			}
 		}
 
 		// TTSR: Check for pattern matches on assistant text/thinking and tool argument deltas
@@ -938,7 +943,7 @@ export class AgentSession {
 			if (event.message.role === "toolResult") {
 				const { toolName, details, isError, content } = event.message as {
 					toolName?: string;
-					details?: { path?: string; phases?: TodoPhase[]; report?: string; startedAt?: string };
+					details?: { action?: string; path?: string; phases?: TodoPhase[]; report?: string; startedAt?: string };
 					isError?: boolean;
 					content?: Array<TextContent | ImageContent>;
 				};
@@ -969,20 +974,12 @@ export class AgentSession {
 					);
 				}
 				if (toolName === "checkpoint" && !isError) {
-					const checkpointEntryId = this.sessionManager.getEntries().at(-1)?.id ?? null;
-					this.#checkpointState = {
-						checkpointMessageCount: this.agent.state.messages.length,
-						checkpointEntryId,
-						startedAt: details?.startedAt ?? new Date().toISOString(),
-					};
-					this.#pendingRewindReport = undefined;
-				}
-				if (toolName === "rewind" && !isError && this.#checkpointState) {
-					const detailReport = typeof details?.report === "string" ? details.report.trim() : "";
-					const textReport = content?.find(part => part.type === "text")?.text?.trim() ?? "";
-					const report = detailReport || textReport;
-					if (report.length > 0) {
-						this.#pendingRewindReport = report;
+					const action = details?.action;
+					if (action === "create") {
+						// Patch the real messageCount now that the tool result is committed.
+						this.#checkpointController.patchMessageCount(this.agent.state.messages.length);
+						const entryId = this.sessionManager.getEntries().at(-1)?.id ?? "";
+						this.#checkpointEntryIds.push(entryId);
 					}
 				}
 			}
@@ -1009,9 +1006,9 @@ export class AgentSession {
 			}
 			this.#resolveRetry();
 
-			if (msg.stopReason === "aborted" && this.#checkpointState) {
-				this.#checkpointState = undefined;
-				this.#pendingRewindReport = undefined;
+			if (msg.stopReason === "aborted") {
+				this.#checkpointController.cancel();
+				this.#checkpointEntryIds.length = 0;
 			}
 			const compactionTask = this.#checkCompaction(msg);
 			this.#trackPostPromptTask(compactionTask);
@@ -2268,15 +2265,8 @@ export class AgentSession {
 		this.#planReferencePath = path;
 	}
 
-	getCheckpointState(): CheckpointState | undefined {
-		return this.#checkpointState;
-	}
-
-	setCheckpointState(state: CheckpointState | undefined): void {
-		this.#checkpointState = state;
-		if (!state) {
-			this.#pendingRewindReport = undefined;
-		}
+	getCheckpointController(): CheckpointController {
+		return this.#checkpointController;
 	}
 
 	/**
@@ -4125,17 +4115,11 @@ export class AgentSession {
 		}
 	}
 	#enforceRewindBeforeYield(): boolean {
-		if (!this.#checkpointState || this.#pendingRewindReport) {
-			return false;
-		}
-		const reminder = [
-			"<system-warning>",
-			"You are in an active checkpoint. You MUST call rewind with your investigation findings before yielding. Do NOT yield without completing the checkpoint.",
-			"</system-warning>",
-		].join("\n");
+		const warning = this.#checkpointController.enforceRewind();
+		if (!warning) return false;
 		this.agent.appendMessage({
 			role: "developer",
-			content: [{ type: "text", text: reminder }],
+			content: [{ type: "text", text: warning }],
 			attribution: "agent",
 			timestamp: Date.now(),
 		});
@@ -4143,36 +4127,39 @@ export class AgentSession {
 		return true;
 	}
 
-	async #applyRewind(report: string): Promise<void> {
-		const checkpointState = this.#checkpointState;
-		if (!checkpointState) {
-			return;
-		}
-		const safeCount = Math.max(0, Math.min(checkpointState.checkpointMessageCount, this.agent.state.messages.length));
+	async #applyRewind(payload: RewindPayload): Promise<void> {
+		const entryId = this.#checkpointEntryIds.pop() ?? null;
+		const safeCount = Math.max(0, Math.min(payload.messageCount, this.agent.state.messages.length));
 		this.agent.replaceMessages(this.agent.state.messages.slice(0, safeCount));
 		try {
-			this.sessionManager.branchWithSummary(checkpointState.checkpointEntryId, report, {
-				startedAt: checkpointState.startedAt,
-			});
+			this.sessionManager.branchWithSummary(entryId, payload.report);
 		} catch (error) {
 			logger.warn("Rewind branch checkpoint missing, falling back to root", {
 				error: error instanceof Error ? error.message : String(error),
 			});
-			this.sessionManager.branchWithSummary(null, report, { startedAt: checkpointState.startedAt });
+			this.sessionManager.branchWithSummary(null, payload.report);
 		}
-		const details = { startedAt: checkpointState.startedAt, rewoundAt: new Date().toISOString() };
+		const details = { rewoundAt: new Date().toISOString() };
 		this.agent.appendMessage({
 			role: "custom",
 			customType: "rewind-report",
-			content: report,
+			content: payload.report,
 			display: false,
 			details,
 			attribution: "agent",
 			timestamp: Date.now(),
 		});
-		this.sessionManager.appendCustomMessageEntry("rewind-report", report, false, details, "agent");
-		this.#checkpointState = undefined;
-		this.#pendingRewindReport = undefined;
+		this.sessionManager.appendCustomMessageEntry("rewind-report", payload.report, false, details, "agent");
+	}
+
+	#applyDrop(payload: DropPayload): void {
+		this.#checkpointEntryIds.pop();
+		const messages = [...this.agent.state.messages];
+		// Splice out checkpoint call+result at the saved position (2 messages)
+		messages.splice(payload.messageCount, 2);
+		// Splice out drop call+result at end (2 messages)
+		messages.splice(messages.length - 2, 2);
+		this.agent.replaceMessages(messages);
 	}
 	async #enforcePlanModeToolDecision(): Promise<void> {
 		if (!this.#planModeState?.enabled) {

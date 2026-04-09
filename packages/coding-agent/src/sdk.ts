@@ -922,8 +922,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		getDiscoverableMCPSearchIndex: () => session.getDiscoverableMCPSearchIndex(),
 		getSelectedMCPToolNames: () => session.getSelectedMCPToolNames(),
 		activateDiscoveredMCPTools: toolNames => session.activateDiscoveredMCPTools(toolNames),
-		getCheckpointState: () => session.getCheckpointState(),
-		setCheckpointState: state => session.setCheckpointState(state ?? undefined),
+		checkpointController: session.getCheckpointController(),
 		getToolChoiceQueue: () => session.toolChoiceQueue,
 		buildToolChoice: name => {
 			const m = session.model;

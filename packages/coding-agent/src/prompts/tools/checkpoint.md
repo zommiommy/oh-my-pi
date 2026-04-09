@@ -1,16 +1,10 @@
-Creates a context checkpoint before exploratory work so you can later rewind and keep only a concise report.
+Manages context checkpoints for exploratory work.
 
-Use this when you need to investigate with many intermediate tool calls (read/grep/find/lsp/etc.) and want to minimize context cost afterward.
+Actions:
+  create — mark current position before exploring (requires goal)
+  rewind — erase exploration, keep only a concise report (requires report)
+  drop   — discard the bookmark, keep the full exploration
 
-Rules:
-- You **MUST** call `rewind` before yielding after starting a checkpoint.
-- You **MUST** provide a clear `goal` explaining what you are investigating.
-- You **MUST NOT** call `checkpoint` while another checkpoint is active.
-- Not available in subagents.
-
-Typical flow:
-1. `checkpoint(goal: …)`
-2. Perform exploratory work
-3. `rewind(report: …)` with concise findings
-
-After rewind, intermediate checkpoint messages are removed from active context and replaced by the report.
+Each rewind/drop pops the most recent checkpoint (stack, DFS).
+You MUST close every checkpoint (rewind or drop) before yielding.
+Call this tool alone — NEVER in parallel with itself.

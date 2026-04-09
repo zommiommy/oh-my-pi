@@ -28,7 +28,7 @@ import { BrowserTool } from "./browser";
 
 import { CalculatorTool } from "./calculator";
 import { CancelJobTool } from "./cancel-job";
-import { type CheckpointState, CheckpointTool, RewindTool } from "./checkpoint";
+import { CheckpointController, CheckpointTool } from "./checkpoint";
 import { DebugTool } from "./debug";
 import { ExitPlanModeTool } from "./exit-plan-mode";
 import { FindTool } from "./find";
@@ -190,10 +190,8 @@ export interface ToolSession {
 	steer?(message: { customType: string; content: string; details?: unknown }): void;
 	/** Peek the currently in-flight tool-choice queue directive's invocation handler. Used by the `resolve` tool to dispatch to the pending action. */
 	peekQueueInvoker?(): ((input: unknown) => Promise<unknown> | unknown) | undefined;
-	/** Get active checkpoint state if any. */
-	getCheckpointState?: () => CheckpointState | undefined;
-	/** Set or clear active checkpoint state. */
-	setCheckpointState?: (state: CheckpointState | null) => void;
+	/** Checkpoint controller for stack-based checkpoint/rewind/drop. */
+	checkpointController?: CheckpointController;
 
 	/** Queue a hidden message to be injected at the next agent turn. */
 	queueDeferredMessage?(message: CustomMessage): void;
@@ -228,8 +226,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	read: s => new ReadTool(s),
 	inspect_image: s => new InspectImageTool(s),
 	browser: s => new BrowserTool(s),
-	checkpoint: CheckpointTool.createIf,
-	rewind: RewindTool.createIf,
+	checkpoint: s => s.checkpointController ? CheckpointTool.createIf(s, s.checkpointController) : null,
 	task: TaskTool.create,
 	cancel_job: CancelJobTool.createIf,
 	await: AwaitTool.createIf,
@@ -375,7 +372,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "search_tool_bm25") return session.settings.get("mcp.discoveryMode");
 		if (name === "calc") return session.settings.get("calc.enabled");
 		if (name === "browser") return session.settings.get("browser.enabled");
-		if (name === "checkpoint" || name === "rewind") return session.settings.get("checkpoint.enabled");
+		if (name === "checkpoint") return session.settings.get("checkpoint.enabled");
 		if (name === "task") {
 			const maxDepth = session.settings.get("task.maxRecursionDepth") ?? 2;
 			const currentDepth = session.taskDepth ?? 0;
