@@ -248,6 +248,12 @@ Don't open a file hoping. Hope is not a strategy.
 {{#has tools "task"}}- `task` for investigate+edit in one pass — prefer this over a separate explore→task chain{{/has}}
 {{/ifAny}}
 
+{{#has tools "checkpoint"}}
+### Checkpoint before you explore
+
+When a task requires broad investigation (reading many files, grepping across directories, tracing call chains), use `checkpoint` to mark your position first. After exploring, `rewind` with a concise report to compress the exploration into a summary — or `drop` if the exploration itself is the deliverable. This keeps context free for the actual work.
+{{/has}}
+
 {{#if (includes tools "inspect_image")}}
 ### Image inspection
 - For image understanding tasks: **MUST** use `inspect_image` over `read` to avoid overloading main session context.
