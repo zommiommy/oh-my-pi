@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a `logitBias` agent option and property, sent as the provider's `logit_bias` on every request and forwarded by `streamProxy`.
+
 ## [18.9.2] - 2026-10-11
 
 ### Changed
