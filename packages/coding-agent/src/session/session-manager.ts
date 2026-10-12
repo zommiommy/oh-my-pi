@@ -3490,6 +3490,7 @@ export class SessionManager {
 		restrictToolNames?: boolean;
 		spawns?: string;
 		readSummarize?: boolean;
+		logitBias?: Record<string, number>;
 		advisor?: string;
 		compactionThreshold?: { thresholdPercent: number; thresholdTokens: number };
 		isolated?: boolean;
@@ -4389,6 +4390,7 @@ export interface PersistedSessionInit {
 	restrictToolNames?: boolean;
 	spawns?: string;
 	readSummarize?: boolean;
+	logitBias?: Record<string, number>;
 	advisor?: string;
 	compactionThreshold?: { thresholdPercent: number; thresholdTokens: number };
 	isolated?: boolean;
@@ -4416,6 +4418,7 @@ export function extractSessionInit(entries: readonly FileEntry[]): PersistedSess
 			outputSchemaMode: entry.outputSchemaMode,
 			restrictToolNames: entry.restrictToolNames,
 			readSummarize: entry.readSummarize,
+			logitBias: entry.logitBias,
 			spawns: entry.spawns,
 			advisor: entry.advisor,
 			isolated: entry.isolated,

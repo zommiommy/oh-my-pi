@@ -2008,6 +2008,7 @@ function buildParams(
 		if (options?.minP !== undefined) {
 			params.min_p = options.minP;
 		}
+		if (options?.logitBias !== undefined) params.logit_bias = options.logitBias;
 		if (initialCompat.supportsPenaltyAndStopParams) {
 			if (options?.presencePenalty !== undefined) {
 				params.presence_penalty = options.presencePenalty;

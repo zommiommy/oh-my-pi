@@ -602,6 +602,8 @@ export interface CreateAgentSessionOptions {
 	thinkingLevel?: ConfiguredThinkingLevel;
 	/** Hard ceiling on the session's thinking effort (e.g. a task spawn's `task.maxEffort`-capped hint); retry-fallback recovery re-clamps to it. */
 	thinkingLevelCeiling?: Effort;
+	/** Provider `logit_bias` (token → bias) sent on every request of this session's agent. */
+	logitBias?: Record<string, number>;
 	/** OpenAI service-tier override for this session. `null` omits `service_tier`. */
 	openAIServiceTier?: ServiceTier | null;
 	/**
@@ -4349,6 +4351,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			followUpMode: cfgFollowUpMode.get(settings),
 			interruptMode: cfgInterruptMode.get(settings),
 			...cfgSampling.get(settings),
+			logitBias: options.logitBias,
 			getToolContext: tc => toolContextStore.getContext(tc),
 			getApiKey: effectiveGetApiKey,
 			streamFn: (streamModel, context, streamOptions) => {
@@ -5187,6 +5190,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					minP: agent.minP,
 					presencePenalty: agent.presencePenalty,
 					repetitionPenalty: agent.repetitionPenalty,
+					logitBias: agent.logitBias,
 					serviceTierResolver: agent.serviceTierResolver,
 					hideThinkingSummary: agent.hideThinkingSummary,
 					maxRetryDelayMs: agent.maxRetryDelayMs,

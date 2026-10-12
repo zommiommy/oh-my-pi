@@ -132,6 +132,7 @@ export function streamOpenAIAnthropicShim(
 					minP: options?.minP,
 					presencePenalty: options?.presencePenalty,
 					repetitionPenalty: options?.repetitionPenalty,
+					logitBias: options?.logitBias,
 					maxTokens: options?.maxTokens ?? model.maxTokens ?? undefined,
 					signal: options?.signal,
 					headers: mergedHeaders,

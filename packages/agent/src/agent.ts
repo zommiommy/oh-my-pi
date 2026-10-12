@@ -219,6 +219,8 @@ export interface AgentOptions {
 	minP?: number;
 	presencePenalty?: number;
 	repetitionPenalty?: number;
+	/** Token bias map sent as the provider's `logit_bias` on every request; see `StreamOptions.logitBias`. */
+	logitBias?: Record<string, number>;
 	serviceTier?: ServiceTier;
 	/**
 	 * Per-call effective service-tier resolver. When set, it authoritatively
@@ -545,6 +547,8 @@ export class Agent {
 	 * ends an interruptible wait without interrupting other tools.
 	 */
 	hasQueuedAsides?: AgentLoopConfig["hasQueuedAsides"];
+	/** Token bias map sent as the provider's `logit_bias` on every request; reassign at any time. */
+	logitBias?: Record<string, number>;
 
 	constructor(opts: AgentOptions = {}) {
 		this.#state = { ...this.#state, ...opts.initialState };
@@ -569,6 +573,7 @@ export class Agent {
 		this.#minP = opts.minP;
 		this.#presencePenalty = opts.presencePenalty;
 		this.#repetitionPenalty = opts.repetitionPenalty;
+		this.logitBias = opts.logitBias;
 		this.#serviceTier = opts.serviceTier;
 		this.#serviceTierResolver = opts.serviceTierResolver;
 		this.#hideThinkingSummary = opts.hideThinkingSummary;
@@ -1853,6 +1858,7 @@ export class Agent {
 			minP: this.#minP,
 			presencePenalty: this.#presencePenalty,
 			repetitionPenalty: this.#repetitionPenalty,
+			logitBias: this.logitBias,
 			serviceTier: this.#serviceTier,
 			hideThinkingSummary: this.#hideThinkingSummary,
 			interruptMode: this.#interruptMode,

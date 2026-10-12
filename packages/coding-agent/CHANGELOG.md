@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `task.agentAliases` to define agent aliases: an alias reuses an existing agent under a new name, with an optional task-list description and a custom `logitBias` sent as the provider's `logit_bias` on every request it makes.
+
 ## [18.10.1] - 2026-10-12
 
 ### Added

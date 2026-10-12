@@ -495,6 +495,13 @@ export interface StreamOptions {
 	 * in the text so far. Range -2.0 to 2.0. Parallel to {@link presencePenalty}.
 	 */
 	frequencyPenalty?: number;
+	/**
+	 * OpenAI-style `logit_bias` for Chat Completions and Responses-family providers;
+	 * others ignore it. Maps token IDs to biases (-100..100); llama.cpp also accepts
+	 * strings it tokenizes. Dropped with other sampling options when
+	 * `compat.supportsSamplingParams` is false.
+	 */
+	logitBias?: Record<string, number>;
 	maxTokens?: number;
 	signal?: AbortSignal;
 	apiKey?: string;

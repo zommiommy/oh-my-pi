@@ -54,6 +54,7 @@ import { AsyncJobError, type AsyncJobManager } from "../async";
 import { hasResolvableTranscript } from "../internal-urls/registry-helpers";
 import { AgentRegistry } from "../registry/agent-registry";
 import { type DiscoveryResult, discoverAgents } from "./discovery";
+import { validateAgentAliases, withAgentAliases } from "./agent-aliases";
 import { createEvalCustomTools, describeEvalTools, evalToolsEnabled } from "./eval-tools";
 import { generateTaskName } from "./name-generator";
 import { AgentOutputManager } from "./output-manager";
@@ -66,6 +67,7 @@ import { type TaskLauncher, TaskLaunchSession } from "./speculative-launch";
 
 import { cfgAsyncEnabled } from "../tools/settings";
 import {
+	cfgTaskAgentAliases,
 	cfgTaskBatch,
 	cfgTaskDisabledAgents,
 	cfgTaskEnableEffort,
@@ -687,9 +689,11 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		const planMode = this.session.getPlanModeState?.()?.enabled === true;
 		const isolationEnabled = cfgTaskIsolationEnabled.get(this.session.settings);
 		return renderDescription({
-			agents:
+			agents: withAgentAliases(
 				discoverySnapshots.get(discoveryCacheKey(this.session.cwd, this.session.effectiveExtensionRoots?.())) ??
-				this.#discoveredAgents,
+					this.#discoveredAgents,
+				validateAgentAliases(cfgTaskAgentAliases.get(this.session.settings)),
+			),
 			sessionAgents: this.session.advertisedSessionAgents?.() ?? this.session.getSessionAgents?.() ?? [],
 			isolationEnabled: !planMode && isolationEnabled,
 			applyIsolatedChanges: cfgTaskIsolationApply.get(this.session.settings),

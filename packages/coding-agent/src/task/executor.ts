@@ -4322,6 +4322,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						model || modelOverride === undefined ? undefined : inheritedRetryFallbackChain,
 					thinkingLevel: effectiveThinkingLevel,
 					thinkingLevelCeiling: spawnEffortCeiling,
+					logitBias: agent.logitBias,
 					// Subagents are short-lived; never schedule background warm requests.
 					cacheWarming: false,
 					toolNames,
@@ -4514,6 +4515,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				readOnly: isReadOnlyAgent(agent),
 				spawns: spawnsEnv,
 				readSummarize: agent.readSummarize,
+				logitBias: agent.logitBias,
 				advisor: advisorSelection ? (advisorRolePattern ?? "on") : undefined,
 				compactionThreshold: options.compactionThresholdOverride,
 				outputSchema,

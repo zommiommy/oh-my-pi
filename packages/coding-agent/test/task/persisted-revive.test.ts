@@ -158,6 +158,7 @@ async function createPersistedSession(
 		isolated?: boolean;
 		retryFallback?: RetryFallbackRole;
 		compactionThreshold?: { thresholdPercent: number; thresholdTokens: number };
+		logitBias?: Record<string, number>;
 	},
 ): Promise<string> {
 	const manager = SessionManager.create(cwd, path.join(cwd, "sessions"));
@@ -175,6 +176,7 @@ async function createPersistedSession(
 		agent: contract?.agent,
 		isolated: contract?.isolated,
 		retryFallback: contract?.retryFallback,
+		logitBias: contract?.logitBias,
 		...(contract?.compactionThreshold !== undefined
 			? { compactionThreshold: contract.compactionThreshold }
 			: undefined),
@@ -743,6 +745,26 @@ describe("persisted subagent revival", () => {
 		expect(resolveThresholdTokens(200_000, revivedCompaction)).toBe(144_000);
 		expect(shouldCompact(130_000, 200_000, revivedCompaction)).toBe(false);
 		expect(shouldCompact(144_001, 200_000, revivedCompaction)).toBe(true);
+	});
+
+	it("restores the persisted alias logit bias on cold revival", async () => {
+		const cwd = makeTempDir("@pi-logit-bias-revive-");
+		const sessionFile = await createPersistedSession(cwd, false, "default", undefined, {
+			agent: "scout-local",
+			logitBias: { "151667": -100 },
+		});
+		let capturedOptions: CreateAgentSessionOptions | undefined;
+		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+			capturedOptions = options;
+			return { session: createRevivedSession([]).session } as CreateAgentSessionResult;
+		});
+
+		const ref = createRef(sessionFile);
+		const reviver = await createFactory(cwd)(ref);
+		if (!reviver) throw new Error("Expected a persisted reviver");
+		await reviver(ref);
+
+		expect(capturedOptions?.logitBias).toEqual({ "151667": -100 });
 	});
 
 	it("pins the persisted concrete model when the default role is revived", async () => {

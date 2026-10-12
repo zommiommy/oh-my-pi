@@ -682,6 +682,7 @@ type OpenAIResponsesSamplingParams = ResponseCreateParamsStreaming & {
 	min_p?: number;
 	presence_penalty?: number;
 	repetition_penalty?: number;
+	logit_bias?: Record<string, number>;
 	session_id?: string;
 	stream_options?: { include_obfuscation?: boolean };
 	provider?: OpenAICompat["openRouterRouting"];

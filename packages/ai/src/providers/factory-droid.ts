@@ -501,6 +501,7 @@ function streamCompletionsWire(a: Attempt, inner: Model<"openai-completions">): 
 		minP: options?.minP,
 		presencePenalty: options?.presencePenalty,
 		repetitionPenalty: options?.repetitionPenalty,
+		logitBias: options?.logitBias,
 		frequencyPenalty: options?.frequencyPenalty,
 		stopSequences: options?.stopSequences,
 		initiatorOverride: options?.initiatorOverride,

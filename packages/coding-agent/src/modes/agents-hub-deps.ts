@@ -21,12 +21,14 @@ import agentCreationArchitectPrompt from "../prompts/system/agent-creation-archi
 import agentCreationUserPrompt from "../prompts/system/agent-creation-user.md" with { type: "text" };
 import { createAgentSession } from "../sdk";
 import { refreshAgentDiscovery } from "../task";
+import { validateAgentAliases, withAgentAliases } from "../task/agent-aliases";
 import { discoverAgents } from "../task/discovery";
 import { resolveAgentPrewalkDefault } from "../task/prewalk";
 import { createModelBrowserSource } from "./model-browser-source";
 
 import {
 	cfgTaskAgentAdvisor,
+	cfgTaskAgentAliases,
 	cfgTaskAgentModelOverrides,
 	cfgTaskAgentPrewalk,
 	cfgTaskDisabledAgents,
@@ -65,7 +67,8 @@ export function createAgentsHubDeps(
 	return {
 		browserSource: createModelBrowserSource(settings, sessionServiceTier),
 		loadAgents: async () => {
-			const { agents } = await discoverAgents(cwd, undefined, extensionRoots());
+			const { agents: discovered } = await discoverAgents(cwd, undefined, extensionRoots());
+			const agents = withAgentAliases(discovered, validateAgentAliases(cfgTaskAgentAliases.get(settings)));
 			const disabled = new Set(cfgTaskDisabledAgents.get(settings));
 			const overrides = cfgTaskAgentModelOverrides.get(settings);
 			const prewalkOverrides = cfgTaskAgentPrewalk.get(settings);

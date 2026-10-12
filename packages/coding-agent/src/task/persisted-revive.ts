@@ -189,6 +189,7 @@ export function createPersistedSubagentReviverFactory(
 					modelRegistry: ctx.modelRegistry,
 					...(persistedModelPattern ? { modelPattern: persistedModelPattern } : {}),
 					modelPatternAuthFallback: init.resolvedModel,
+					logitBias: init.logitBias,
 					settings: subagentSettings,
 					sessionManager: reopened,
 					agentId: ref.id,

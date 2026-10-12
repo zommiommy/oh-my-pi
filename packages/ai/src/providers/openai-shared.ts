@@ -4019,18 +4019,19 @@ export type ResponsesSamplingParamsExtras = {
 	min_p?: number;
 	presence_penalty?: number;
 	repetition_penalty?: number;
+	logit_bias?: Record<string, number>;
 };
 
 type CommonResponsesParams = ResponseCreateParamsStreaming & ResponsesSamplingParamsExtras;
 
 type CommonSamplingOptions = Pick<
 	StreamOptions,
-	"temperature" | "topP" | "topK" | "minP" | "presencePenalty" | "repetitionPenalty" | "maxTokens"
+	"temperature" | "topP" | "topK" | "minP" | "presencePenalty" | "repetitionPenalty" | "logitBias" | "maxTokens"
 > & { serviceTier?: ServiceTier };
 
 /**
  * Apply the common `StreamOptions` → Responses sampling-parameter mapping (max output tokens,
- * temperature, top-p/k, min-p, presence/repetition penalties, service tier). Mutates `params`.
+ * temperature, top-p/k, min-p, presence/repetition penalties, logit bias, service tier). Mutates `params`.
  *
  * `max_output_tokens` is suppressed when {@link Model.omitMaxOutputTokens} is `true`, so
  * proxies (notably Ollama) that forward to upstream APIs with an unknown output-token cap
@@ -4061,6 +4062,7 @@ export function applyCommonResponsesSamplingParams<P extends CommonResponsesPara
 		if (options?.topP !== undefined) params.top_p = options.topP;
 		if (options?.topK !== undefined) params.top_k = options.topK;
 		if (options?.minP !== undefined) params.min_p = options.minP;
+		if (options?.logitBias !== undefined) params.logit_bias = options.logitBias;
 		if (model.compat.supportsPenaltyAndStopParams) {
 			if (options?.presencePenalty !== undefined) params.presence_penalty = options.presencePenalty;
 			if (options?.repetitionPenalty !== undefined) params.repetition_penalty = options.repetitionPenalty;

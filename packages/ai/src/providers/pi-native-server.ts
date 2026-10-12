@@ -53,6 +53,7 @@ const ALLOWED_OPTION_KEYS: ReadonlySet<keyof SimpleStreamOptions> = new Set([
 	"presencePenalty",
 	"frequencyPenalty",
 	"repetitionPenalty",
+	"logitBias",
 	"stopSequences",
 	"maxTokens",
 	"cacheRetention",
