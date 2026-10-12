@@ -34,6 +34,7 @@ import { isIrcEnabled } from "../irc/messaging";
 import { buildOutputValidator } from "../tools/output-schema-validator";
 import { trackLateCleanup } from "../utils/late-cleanup";
 import { type DiscoveryResult, discoverAgents, getAgent } from "./discovery";
+import { validateAgentAliases, withAgentAliases } from "./agent-aliases";
 import { type ExecutorOptions, runSubprocess } from "./executor";
 import {
 	applyEligibleNestedPatches,
@@ -62,6 +63,7 @@ import { parseIsolationBackend } from "./worktree";
 import {
 	cfgIsolationBackend,
 	cfgTaskAgentAccountPools,
+	cfgTaskAgentAliases,
 	cfgTaskAgentCompactionThresholdOverrides,
 	cfgTaskAgentModelOverrides,
 	cfgTaskAgentServiceTierOverrides,
@@ -340,10 +342,18 @@ export async function resolveEffectiveSubagentPolicy(
 	assertDepthAndSpawnAllowed(request, agentName);
 
 	const discovery = await discoverAgentsShared(request.session.cwd, request.session.effectiveExtensionRoots?.());
-	const agents = [...discovery.agents, ...(request.session.getSessionAgents?.() ?? [])];
+	const aliases = validateAgentAliases(cfgTaskAgentAliases.get(request.session.settings));
+	const agents = [...withAgentAliases(discovery.agents, aliases), ...(request.session.getSessionAgents?.() ?? [])];
 	const agent = getAgent(agents, agentName);
 	if (!agent) {
 		const available = agents.map(candidate => candidate.name).join(", ") || "none";
+		const alias = Object.hasOwn(aliases, agentName) ? aliases[agentName] : undefined;
+		if (alias) {
+			throw new StructuredSubagentError(
+				"preflight",
+				`Agent alias "${agentName}" targets "${alias.agent}", which is not a discovered agent. Available: ${available}.`,
+			);
+		}
 		const searched = discovery.searchedDirs?.map(dir => shortenPath(dir)).join(", ") || "none";
 		throw new StructuredSubagentError(
 			"preflight",

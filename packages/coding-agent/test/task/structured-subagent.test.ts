@@ -148,6 +148,43 @@ describe("structured subagent primitive", () => {
 		expect(policy.modelOverride).toEqual(["b/y"]);
 	});
 
+	it("spawns a task.agentAliases entry as its base agent under the alias name", async () => {
+		mockDiscovery();
+		const settings = Settings.isolated({
+			"task.agentAliases": {
+				"biased-worker": { agent: "worker", description: "Biased worker", logitBias: { "151667": -100 } },
+			},
+			"task.agentModelOverrides": { worker: "a/base", "biased-worker": "a/biased" },
+		});
+		const policy = await resolveEffectiveSubagentPolicy(
+			request({ session: session({ settings }), agent: "biased-worker" }),
+		);
+		expect(policy.agent).toMatchObject({
+			name: "biased-worker",
+			description: "Biased worker",
+			systemPrompt: AGENT.systemPrompt,
+			tools: AGENT.tools,
+			logitBias: { "151667": -100 },
+		});
+		// Per-agent settings match the alias name; the base agent's entry does not carry over.
+		expect(policy.modelOverride).toEqual(["a/biased"]);
+	});
+
+	it("never lets an alias shadow a discovered agent and rejects an alias whose target is missing", async () => {
+		mockDiscovery();
+		const settings = Settings.isolated({
+			"task.agentAliases": {
+				worker: { agent: "worker", logitBias: { "1": -100 } },
+				orphan: { agent: "missing" },
+			},
+		});
+		const worker = await resolveEffectiveSubagentPolicy(request({ session: session({ settings }) }));
+		expect(worker.agent.logitBias).toBeUndefined();
+		await expect(
+			resolveEffectiveSubagentPolicy(request({ session: session({ settings }), agent: "orphan" })),
+		).rejects.toThrow('Agent alias "orphan" targets "missing", which is not a discovered agent.');
+	});
+
 	it("rescans agents when a plugin provider is disabled while an earlier discovery is in flight", async () => {
 		const previouslyDisabled = getDisabledProviders();
 		enableProvider("omp-plugins");

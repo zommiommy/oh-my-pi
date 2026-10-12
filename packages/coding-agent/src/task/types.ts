@@ -241,6 +241,8 @@ export interface AgentDefinition {
 	prewalk?: boolean | string;
 	/** Advisor for spawned sessions of this agent: `true` = advise with the default advisor-role model, string = advise with that model pattern (optional `:level` suffix). Absent/`false` = no advisor. */
 	advisor?: boolean | string;
+	/** Sent as the provider's `logit_bias` on every request this agent makes; set by `task.agentAliases`. */
+	logitBias?: Record<string, number>;
 	source: AgentSource;
 	filePath?: string;
 }

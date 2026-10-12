@@ -261,6 +261,8 @@ export interface SessionInitEntry extends SessionEntryBase {
 	spawns?: string;
 	/** The agent's `readSummarize` setting (`false` = read summarization disabled); absent uses the session default. */
 	readSummarize?: boolean;
+	/** Provider `logit_bias` the agent's requests carried (task agent aliases); revival restores it. */
+	logitBias?: Record<string, number>;
 	/** Effective advisor for this subagent: `"on"` = advisor-role model, else an explicit model pattern; absent = unadvised. */
 	advisor?: string;
 	/** Effective thresholds for a child with an explicit compaction override. */

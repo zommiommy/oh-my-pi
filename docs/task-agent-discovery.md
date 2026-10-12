@@ -27,7 +27,7 @@ It covers runtime behavior as implemented today, including precedence, invalid-d
 Task agents normalize into `AgentDefinition` (`src/task/types.ts`):
 
 - required `name`, `description`, and `systemPrompt`
-- optional `tools`, `spawns`, prioritized `model` list, `thinkingLevel`, `output`, `blocking`, `autoloadSkills`, `readSummarize`, `prewalk`, `advisor`
+- optional `tools`, `spawns`, prioritized `model` list, `thinkingLevel`, `output`, `blocking`, `autoloadSkills`, `readSummarize`, `prewalk`, `advisor`, `logitBias` (set only by [agent aliases](#agent-aliases))
 - `source`: `"bundled" | "user" | "project"` (extension agents are tagged with their extension root's project/user level)
 - optional `filePath`
 
@@ -102,6 +102,28 @@ Tagging a model never rewrites the model-facing `task` description mid-session: 
 Pseudonyms survive `/resume`; rewinding before a model's first mention frees its number. Repeating a selector reuses its pseudonym. Unknown selectors remain literal, as do mentions in `!`/`$` local-execution drafts. Tokens require whitespace boundaries: autocomplete adds the trailing space. When two models share a display name in one draft, the second remains a literal selector to avoid ambiguous expansion.
 
 Session definitions are appended after discovered agents, so an existing agent with the same name wins. Normal spawn restrictions and model-override precedence still apply. Synthetic prompts cannot register models.
+
+## Agent aliases
+
+`task.agentAliases` adds agent names that reuse an existing agent's definition. Each entry names the discovered or bundled agent to copy (`agent`), and may replace its task-list `description` and attach a `logitBias`:
+
+```yaml
+task:
+  agentAliases:
+    scout-local:
+      agent: scout
+      description: Read-only scout on the local model; use only when asked for scout-local.
+      logitBias:
+        "151667": -100 # token id → bias
+  agentModelOverrides:
+    scout-local: llama.cpp/qwen3-coder
+```
+
+- An alias copies the agent's prompt, tools, frontmatter model, thinking level, and other fields under the alias name. The task tool lists it after the discovered agents, and `task`, eval `agent()`, and `workpool()` spawn it by name. `/agents` lists it too, so its model can be set there.
+- `logitBias` is sent as the provider's `logit_bias` on every request the alias makes, including after a cold revival. OpenAI Chat Completions and Responses-family APIs encode it; other APIs ignore it, and models that reject sampling parameters (OpenAI reasoning models) drop it. Token ids are tokenizer-specific, so pin the alias to a model with `task.agentModelOverrides`. Keys pass through verbatim: llama.cpp also accepts a string, which it tokenizes (`"Paris": -100`).
+- Per-agent settings (`task.agentModelOverrides`, `task.disabledAgents`, `task.agentServiceTierOverrides`, …) and agent-scoped rules match the alias name exactly; entries for the aliased agent do not carry over.
+- An alias never shadows an agent with the same name, and it can target only a discovered agent, not another alias or a user-tagged model. Spawning an alias whose target is missing fails preflight with `Agent alias "<name>" targets "<agent>", which is not a discovered agent.`
+- A `null` alias or bias entry clears one from a lower settings layer. Unknown fields (such as `logit_bias`), a missing `agent`, a non-number bias, or the reserved names `main` and `sub` fail settings load.
 
 ## Watch running agents
 
@@ -208,7 +230,7 @@ Lookup is exact-name linear search:
 1. atomically reloads the live session's persisted global, project, and explicit overlay settings while preserving runtime overrides
 2. resolves the omitted or explicit agent name from the parent spawn policy
 3. enforces depth, blocked-self-recursion, and parent spawn-policy guards
-4. rediscovers agents with the session's cwd and effective extension-root configuration, appends user-tagged session agents, and performs exact lookup
+4. rediscovers agents with the session's cwd and effective extension-root configuration, appends `task.agentAliases` aliases and then user-tagged session agents, and performs exact lookup
 5. checks `task.disabledAgents`
 6. resolves plan-mode restrictions, output schema, model policy, and isolation policy
 
@@ -216,7 +238,7 @@ A missing name fails preflight with `Unknown agent "...". Available: ...`; no su
 
 ### Description vs execution-time discovery
 
-`TaskTool.create()` memoizes discovery by resolved working directory plus the complete effective extension-root configuration when building the model-facing tool description. Each description read also includes the user-tagged model agents frozen into the current base prompt surface (see [user-tagged model agents](#user-tagged-model-agents)) rather than the live set, so tagging a model mid-session cannot mutate the provider tool prefix. Execution rediscovers agents and merges the live session agents, so the runtime set can differ from the earlier description if agent or extension files changed mid-session. Blocking behavior is determined after policy resolution rather than from a stale description-time agent object.
+`TaskTool.create()` memoizes discovery by resolved working directory plus the complete effective extension-root configuration when building the model-facing tool description. Each description read appends the current `task.agentAliases` aliases, and includes the user-tagged model agents frozen into the current base prompt surface (see [user-tagged model agents](#user-tagged-model-agents)) rather than the live set, so tagging a model mid-session cannot mutate the provider tool prefix. Execution rediscovers agents and merges the live session agents, so the runtime set can differ from the earlier description if agent or extension files changed mid-session. Blocking behavior is determined after policy resolution rather than from a stale description-time agent object.
 
 ## Model and structured-output precedence
 

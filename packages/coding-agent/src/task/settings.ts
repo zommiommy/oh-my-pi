@@ -13,10 +13,12 @@ import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
 import { logger, setWorktreesDir } from "@oh-my-pi/pi-utils";
 import { setFeedModelBadgeEnabled } from "@oh-my-pi/pi-tui/render/render-utils";
 import { getThinkingLevelMetadata } from "@oh-my-pi/pi-tui/thinking";
+import { type AgentAlias, validateAgentAliases } from "./agent-aliases";
 
 const EMPTY_AGENT_SERVICE_TIER_OVERRIDES: Record<string, ServiceTierInheritSettingValue> = {};
 const EMPTY_AGENT_COMPACTION_THRESHOLD_OVERRIDES: Record<string, AgentCompactionThresholdOverride> = {};
 const EMPTY_AGENT_ACCOUNT_POOLS: Record<string, OAuthAccountPools> = {};
+const EMPTY_AGENT_ALIASES: Record<string, AgentAlias> = {};
 
 const DEFAULT_AGENT_MODEL_OVERRIDES: Record<string, string | string[]> = {};
 
@@ -431,6 +433,14 @@ export const cfgTaskDisabledAgents = register({
 	protocolDefault: ["rpc", "acp"],
 	type: "array",
 	default: [] as string[],
+});
+
+export const cfgTaskAgentAliases = register({
+	id: "task.agentAliases",
+	protocolDefault: ["rpc", "acp"],
+	type: "record",
+	default: EMPTY_AGENT_ALIASES,
+	validate: validateAgentAliases,
 });
 
 export const cfgTaskAgentModelOverrides = register({
