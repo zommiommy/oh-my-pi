@@ -162,6 +162,7 @@ function buildStreamOptions(parsed: ParsedFormatRequest, api: Api, signal: Abort
 	if (options.presencePenalty !== undefined && !isCodex) opts.presencePenalty = options.presencePenalty;
 	if (options.frequencyPenalty !== undefined && !isCodex) opts.frequencyPenalty = options.frequencyPenalty;
 	if (options.repetitionPenalty !== undefined && !isCodex) opts.repetitionPenalty = options.repetitionPenalty;
+	if (options.logitBias !== undefined && !isCodex) opts.logitBias = options.logitBias;
 	if (options.metadata !== undefined) opts.metadata = options.metadata;
 	if (options.userProfileId !== undefined) opts.userProfileId = options.userProfileId;
 	if (options.headers !== undefined) opts.headers = { ...opts.headers, ...options.headers };
@@ -218,7 +219,6 @@ function buildStreamOptions(parsed: ParsedFormatRequest, api: Api, signal: Abort
 		options.parallelToolCalls !== undefined ||
 		options.previousResponseId !== undefined ||
 		options.seed !== undefined ||
-		options.logitBias !== undefined ||
 		options.user !== undefined ||
 		options.responseFormat !== undefined
 	) {
@@ -227,7 +227,6 @@ function buildStreamOptions(parsed: ParsedFormatRequest, api: Api, signal: Abort
 			parallelToolCalls: options.parallelToolCalls,
 			previousResponseId: options.previousResponseId,
 			seed: options.seed,
-			hasLogitBias: options.logitBias !== undefined,
 			user: options.user,
 			hasResponseFormat: options.responseFormat !== undefined,
 		});
@@ -600,6 +599,7 @@ async function handlePiNative(
 		delete streamOpts.presencePenalty;
 		delete streamOpts.frequencyPenalty;
 		delete streamOpts.repetitionPenalty;
+		delete streamOpts.logitBias;
 	}
 	// Merge gateway-captured passthrough headers under the client's own
 	// headers — the client's values win when they collide.

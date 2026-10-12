@@ -1196,7 +1196,7 @@ function withInferenceSessionId(options?: SimpleStreamOptions): SimpleStreamOpti
 
 type SamplingOptions = Pick<
 	StreamOptions,
-	"temperature" | "topP" | "topK" | "minP" | "presencePenalty" | "repetitionPenalty" | "frequencyPenalty"
+	"temperature" | "topP" | "topK" | "minP" | "presencePenalty" | "repetitionPenalty" | "frequencyPenalty" | "logitBias"
 >;
 
 /**
@@ -1214,7 +1214,8 @@ function withSupportedSamplingParams<T extends SamplingOptions>(model: Model<Api
 		options.minP === undefined &&
 		options.presencePenalty === undefined &&
 		options.repetitionPenalty === undefined &&
-		options.frequencyPenalty === undefined
+		options.frequencyPenalty === undefined &&
+		options.logitBias === undefined
 	) {
 		return options;
 	}
@@ -1228,6 +1229,7 @@ function withSupportedSamplingParams<T extends SamplingOptions>(model: Model<Api
 	delete supported.presencePenalty;
 	delete supported.repetitionPenalty;
 	delete supported.frequencyPenalty;
+	delete supported.logitBias;
 	return supported;
 }
 
@@ -1825,6 +1827,7 @@ function mapOptionsForApi<TApi extends Api>(
 		minP: options?.minP,
 		presencePenalty: options?.presencePenalty,
 		repetitionPenalty: options?.repetitionPenalty,
+		logitBias: options?.logitBias,
 		maxTokens: options?.maxTokens ?? model.maxTokens ?? undefined,
 		signal: options?.signal,
 		apiKey: apiKey ?? (typeof options?.apiKey === "string" ? options.apiKey : undefined),

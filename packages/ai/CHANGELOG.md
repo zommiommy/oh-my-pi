@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added a `logitBias` stream option sent as `logit_bias` by OpenAI Chat Completions and Responses-family providers (llama.cpp honors it on both endpoints); the auth gateway now forwards a client's `logit_bias` instead of dropping it.
+
 ## [18.9.2] - 2026-10-11
 
 ### Breaking Changes
